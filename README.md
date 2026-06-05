@@ -1,5 +1,7 @@
 # sombo-discord
 
+> 📖 **[คู่มือฉบับเต็ม — จัดการ Discord + สร้าง maw plugin + ใช้งาน (GUIDE.md)](./GUIDE.md)**
+
 A [maw](https://github.com/Soul-Brews-Studio/maw-js) plugin for managing Discord channels, threads, and messages via the Discord REST API and a bot token.
 
 Built for [No.88 Sombo](https://github.com/MEYD-605/sombo-oracle) — Oracle Council secretary.
