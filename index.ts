@@ -1,11 +1,12 @@
 import type { InvokeContext, InvokeResult } from "maw-js/plugin/types";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync, unlinkSync } from "fs";
+import { execFileSync } from "child_process";
 
 export const command = {
-  // `maw sombo discord <cmd>` is the canonical form (P'Nat 2026-06-05 — nested group).
-  // `sombo-discord` / `sd` kept as aliases for backward compatibility.
+  // `maw sombo <discord|notion> <cmd>` — nested service groups (P'Nat 2026-06-05).
+  // `sombo-discord` / `sd` kept as aliases for the discord group (backward compat).
   name: ["sombo", "sombo-discord", "sd"],
-  description: "Manage the Oracle School Discord (channels/threads/messages) via REST API + bot token.",
+  description: "Sombo's ops: `maw sombo discord <cmd>` (Discord via REST) + `maw sombo notion <cmd>` (Notion via notion-cli).",
 };
 
 const API = "https://discord.com/api/v10";
@@ -40,14 +41,80 @@ async function dapi(method: string, path: string, body?: unknown) {
 
 const TYPES: Record<number, string> = { 0: "text", 2: "voice", 4: "CATEGORY", 5: "news", 11: "pub-thread", 12: "priv-thread", 15: "forum" };
 
+// ── notion subgroup ── wraps notion-cli (must be installed + configured on the host).
+function notionBin(): string {
+  for (const p of ["/root/.local/bin/notion-cli", "notion-cli"]) {
+    try { if (p.startsWith("/")) { readFileSync(p); return p; } } catch { /* try next */ }
+  }
+  return "notion-cli"; // fall back to PATH lookup
+}
+function ncli(args: string[]): any {
+  const out = execFileSync(notionBin(), args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+  try { return JSON.parse(out); } catch { return { raw: out }; }
+}
+function nodeTitle(it: any): string {
+  if (it?.object === "database") return (it.title ?? []).map((x: any) => x.plain_text).join("") || "(db)";
+  for (const v of Object.values(it?.properties ?? {}) as any[]) {
+    if (v?.type === "title") return (v.title ?? []).map((x: any) => x.plain_text).join("");
+  }
+  return "(untitled)";
+}
+async function handleNotion(a: string[], say: (...x: any[]) => void): Promise<InvokeResult> {
+  const [sub, ...rest] = a;
+  try {
+    switch (sub) {
+      case "whoami": {
+        const d = ncli(["whoami", "--output", "json"]);
+        const u = d?.data?.results?.[0] ?? d?.data ?? d;
+        say(`notion bot: ${u?.name ?? "?"}  id: ${u?.id ?? "?"}`);
+        break;
+      }
+      case "search": {
+        const q = rest.join(" ");
+        const d = ncli(["search", "--query", q, "--limit", "12", "--output", "json"]);
+        const res = d?.data?.results ?? [];
+        say(`${res.length} result(s):`);
+        for (const it of res) say(`  [${it.object}] ${nodeTitle(it)}  ${it.id}`);
+        break;
+      }
+      case "push": {
+        // maw sombo notion push <parentPageId> <markdownFile> <title...>
+        const [parent, file, ...titleParts] = rest;
+        const title = titleParts.join(" ");
+        if (!parent || !file || !title) return { ok: false, error: "usage: maw sombo notion push <parentPageId> <markdownFile> <title...>" };
+        const props = JSON.stringify({ title: [{ text: { content: title } }] });
+        const cr = ncli(["page", "create", "-p", parent, "--icon-emoji", "🗄️", "--properties", props, "--output", "json"]);
+        const id = cr?.data?.id;
+        if (!id) return { ok: false, error: `page create failed: ${JSON.stringify(cr).slice(0, 200)}` };
+        // markdown set chunks server-side (page create -f caps at 100 blocks)
+        const sr = ncli(["markdown", "set", id, "--file", file, "--output", "json"]);
+        if (sr?.success === false) return { ok: false, error: `content push failed: ${JSON.stringify(sr?.error).slice(0, 200)}` };
+        const url = ncli(["page", "retrieve", id, "--output", "json"])?.data?.url;
+        say(`✓ pushed: ${title}`);
+        say(`  ${url ?? id}`);
+        break;
+      }
+      default:
+        return { ok: false, error: "usage: maw sombo notion <whoami|search <q>|push <parentPageId> <mdFile> <title...>>" };
+    }
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+}
+
 export default async function handler(ctx: InvokeContext): Promise<InvokeResult> {
   const logs: string[] = [];
   const say = (...a: any[]) => { (ctx.writer ? ctx.writer : (s: string) => logs.push(s))(a.map(String).join(" ")); };
 
   // Normalize args from CLI (string[]) or API (record).
   const a = ctx.source === "cli" ? (ctx.args as string[]) : ((ctx.args as any)?._ ?? []);
-  // Nested form `maw sombo discord <cmd>`: strip an optional leading "discord" subgroup
-  // so both `maw sombo discord whoami` and `maw sombo-discord whoami` resolve the same.
+  // Service groups: `maw sombo notion <cmd>` routes to the notion handler;
+  // `maw sombo discord <cmd>` (or bare, for backward compat) routes to the discord switch below.
+  if (a[0] === "notion") {
+    const r = await handleNotion(a.slice(1), say);
+    return { ...r, output: logs.join("\n") || undefined };
+  }
   const args = a[0] === "discord" ? a.slice(1) : a;
   const [sub, ...rest] = args;
 
