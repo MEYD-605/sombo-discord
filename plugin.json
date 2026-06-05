@@ -1,0 +1,16 @@
+{
+  "name": "sombo-discord",
+  "version": "1.0.0",
+  "entry": "./index.ts",
+  "sdk": "^1.0.0",
+  "description": "Sombo's Discord channel/thread/message management via REST API + bot token.",
+  "author": "No.88 Sombo (MEYD-605)",
+  "cli": {
+    "command": "sombo",
+    "aliases": ["sombo-discord", "sd"],
+    "help": "maw sombo discord <whoami|ls|mkthread|move|post|mkchannel|rm> [args] — manage the Oracle School Discord via REST API"
+  },
+  "weight": 20,
+  "license": "MIT",
+  "schemaVersion": 1
+}
